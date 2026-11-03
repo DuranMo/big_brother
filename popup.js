@@ -1,5 +1,6 @@
 import { ADDITION_COOLDOWN } from "./domains.js";
 
+const extension = globalThis.browser ?? globalThis.chrome;
 const form = document.querySelector("#add-form");
 const input = document.querySelector("#domain");
 const list = document.querySelector("#domains");
@@ -13,7 +14,7 @@ function showError(message = "") {
 }
 
 async function request(type, domain) {
-  const response = await chrome.runtime.sendMessage({ type, domain });
+  const response = await extension.runtime.sendMessage({ type, domain });
   if (!response?.ok) throw new Error(response?.error || "Could not contact the background worker.");
   return response.domains;
 }
@@ -92,7 +93,7 @@ form.addEventListener("submit", event => {
   event.preventDefault();
   mutate("add", input.value);
 });
-chrome.storage.onChanged.addListener((changes, area) => {
+extension.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.domains) refresh();
 });
 setInterval(updateCountdowns, 1000);

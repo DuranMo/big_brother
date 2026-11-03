@@ -98,21 +98,25 @@ function mockChrome() {
   return { api, state, message };
 }
 
-test("background enforces addition cooldowns and recovers across wakes", async t => {
+for (const namespace of ["chrome", "browser"]) {
+test(`${namespace}: background enforces addition cooldowns and recovers across wakes`, async t => {
   const { api, state, message } = mockChrome();
   const originalChrome = globalThis.chrome;
+  const originalBrowser = globalThis.browser;
   const originalNow = Date.now;
   const originalError = console.error;
   let now = 1_800_000_000_000;
   Date.now = () => now;
-  globalThis.chrome = api;
+  globalThis.chrome = namespace === "chrome" ? api : undefined;
+  globalThis.browser = namespace === "browser" ? api : undefined;
   console.error = () => {}; // Expected API failure cases below.
   t.after(() => {
     Date.now = originalNow;
     globalThis.chrome = originalChrome;
+    globalThis.browser = originalBrowser;
     console.error = originalError;
   });
-  await import("../background.js");
+  await import(`../background.js?namespace=${namespace}`);
   assert.deepEqual((await message("list")).domains, []);
 
   const additions = await Promise.all([message("add", "EXAMPLE.COM"), message("add", "example.org")]);
@@ -214,7 +218,7 @@ test("background enforces addition cooldowns and recovers across wakes", async t
   api.runtime.onMessage = event();
   api.storage.onChanged = event();
   state.alarms.clear();
-  await import("../background.js?wake=2");
+  await import(`../background.js?wake=2&namespace=${namespace}`);
   await message("list");
   assert.equal(state.domains[0].addedAt, now);
   assert.equal((await message("remove", "example.edu")).ok, false);
@@ -241,11 +245,13 @@ test("background enforces addition cooldowns and recovers across wakes", async t
   assert.equal(state.domains[0].addedAt, migrated[0].addedAt);
   assert.equal((await message("remove", "example.org")).ok, true);
 });
+}
 
 test("manifest paths exist and the blocked page has only the requested sentence", async () => {
   const root = new URL("../", import.meta.url);
   const manifest = JSON.parse(await readFile(new URL("manifest.json", root), "utf8"));
   assert.equal(manifest.manifest_version, 3);
+  assert.ok(manifest.permissions.includes("declarativeNetRequestWithHostAccess"));
   for (const path of [manifest.background.service_worker, manifest.action.default_popup,
     ...manifest.web_accessible_resources[0].resources]) {
     assert.ok((await readFile(new URL(path, root))).length);
