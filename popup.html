@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blocked domains</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="popup.js" type="module"></script>
+</head>
+<body>
+  <form id="add-form">
+    <input id="domain" type="text" aria-label="Domain" placeholder="example.com" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+    <button type="submit">Add</button>
+  </form>
+  <p id="error" role="alert" hidden></p>
+  <ul id="domains" aria-label="Blocked domains"></ul>
+</body>
+</html>

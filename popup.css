@@ -1,0 +1,15 @@
+body {
+  width: 330px;
+  margin: 12px;
+  background: white;
+  color: #222;
+  font: 14px system-ui, sans-serif;
+}
+form, li { display: flex; align-items: center; gap: 8px; }
+input { flex: 1; min-width: 0; padding: 5px; }
+button { padding: 4px 8px; cursor: pointer; }
+ul { list-style: none; padding: 0; margin: 12px 0 0; }
+li { margin-top: 8px; }
+li > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+time { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
+#error { color: #9b2424; margin: 10px 0 0; }

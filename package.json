@@ -1,0 +1,6 @@
+{
+  "name": "big_brother",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}
