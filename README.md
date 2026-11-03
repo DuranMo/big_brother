@@ -1,6 +1,6 @@
 # Big Brother
 
-an extension that makes sure you aren't slacking off
+an extension that makes sure you (i) aren't slacking off
 
 ## Install
 
