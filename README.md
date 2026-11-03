@@ -2,7 +2,7 @@
 
 an extension that makes sure you (i) aren't slacking off
 
-## Chrome
+## Install
 
 1. download the big_brother folder
 2. open extensions on chrome or edge
