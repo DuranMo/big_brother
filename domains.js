@@ -31,20 +31,32 @@ export function normalizeDomain(input) {
 }
 
 export function buildRules(entries) {
-  const requestDomains = entries.map(entry => entry.domain).sort();
-  if (!requestDomains.length) return [];
-  return [
-    {
-      id: 1,
-      priority: 1,
-      action: { type: "redirect", redirect: { extensionPath: "/blocked.html" } },
-      condition: { requestDomains, regexFilter: "^https?://", resourceTypes: ["main_frame"] }
-    },
-    {
-      id: 2,
-      priority: 1,
-      action: { type: "block" },
-      condition: { requestDomains, excludedResourceTypes: ["main_frame"] }
-    }
-  ];
+  return entries.map(entry => entry.domain).sort().flatMap((domain, index) => {
+    // Keep the hostname in the URL pattern itself: Safari versions differ in
+    // requestDomains support. A scheme-only filter could otherwise match all sites.
+    const host = domain.replace(/\./g, "\\.");
+    const authority = `([^/?#]*@)?([^./:@?#]+\\.)*${host}\\.?(:[0-9]+)?([/?#].*)?$`;
+    return [
+      {
+        id: index * 2 + 1,
+        priority: 1,
+        action: { type: "redirect", redirect: { extensionPath: "/blocked.html" } },
+        condition: {
+          regexFilter: `^https?://${authority}`,
+          isUrlFilterCaseSensitive: false,
+          resourceTypes: ["main_frame"]
+        }
+      },
+      {
+        id: index * 2 + 2,
+        priority: 1,
+        action: { type: "block" },
+        condition: {
+          regexFilter: `^[a-z]+://${authority}`,
+          isUrlFilterCaseSensitive: false,
+          excludedResourceTypes: ["main_frame"]
+        }
+      }
+    ];
+  });
 }

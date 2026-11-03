@@ -30,16 +30,49 @@ test("rules use domain boundaries and cannot redirect the extension itself", () 
   const redirect = rules.find(rule => rule.action.type === "redirect");
   const block = rules.find(rule => rule.action.type === "block");
   assert.equal(redirect.action.redirect.extensionPath, "/blocked.html");
-  assert.deepEqual(redirect.condition.requestDomains, ["example.com"]);
   assert.deepEqual(redirect.condition.resourceTypes, ["main_frame"]);
   assert.deepEqual(block.condition.excludedResourceTypes, ["main_frame"]);
-  const scheme = new RegExp(redirect.condition.regexFilter);
-  assert.ok(scheme.test("https://example.com/"));
-  assert.ok(scheme.test("http://sub.example.com/"));
-  assert.ok(!scheme.test("chrome-extension://example.com/blocked.html"));
-  // requestDomains is Chrome's hostname matcher, never a URL substring filter.
-  assert.equal(redirect.condition.urlFilter, undefined);
+  for (const url of [
+    "https://example.com/", "http://sub.example.com/", "https://a.b.example.com/path",
+    "https://example.com:8443/", "https://example.com./", "https://EXAMPLE.COM/",
+    "https://user:pass@sub.example.com/", "https://example.com"
+  ]) {
+    assert.ok(matchesRequest(rules, url, "main_frame", "redirect"), url);
+    assert.ok(matchesRequest(rules, url, "script", "block"), url);
+  }
+  for (const url of [
+    "https://notexample.com/", "https://example.com.other.org/", "https://exampleXcom/",
+    "https://example.org/example.com", "https://example.org/?url=https://example.com/",
+    "https://example.com@other.org/", "https://other.org/#https://example.com/",
+    "chrome-extension://example.com/blocked.html", "safari-web-extension://example.com/blocked.html",
+    "https://example.com-other.org/", "https://other.org/", "https://other.org/example.com/file.js"
+  ]) {
+    assert.ok(!matchesRequest(rules, url, "main_frame"), url);
+    assert.ok(!matchesRequest(rules, url, "script"), url);
+  }
+  assert.ok(matchesRequest(rules, "wss://sub.example.com/socket", "websocket", "block"));
+  assert.ok(!matchesRequest(rules, "wss://other.org/socket", "websocket"));
+  // Even an engine ignoring requestDomains must still scope every rule by URL.
+  assert.ok(rules.every(rule => !rule.condition.requestDomains && rule.condition.regexFilter));
+  const many = buildRules([{ domain: "example.org" }, { domain: "example.com" }]);
+  assert.equal(new Set(many.map(rule => rule.id)).size, many.length);
+  assertRulesFor(many, ["example.com", "example.org"]);
 });
+
+function matchesRequest(rules, url, resourceType, action) {
+  return rules.some(rule => (!action || rule.action.type === action) &&
+    (!rule.condition.resourceTypes || rule.condition.resourceTypes.includes(resourceType)) &&
+    !rule.condition.excludedResourceTypes?.includes(resourceType) &&
+    new RegExp(rule.condition.regexFilter, "i").test(url));
+}
+
+function assertRulesFor(rules, domains) {
+  assert.equal(rules.length, domains.length * 2);
+  for (const domain of ["example.com", "example.org", "example.net", "example.edu", "example.io", "other.org"]) {
+    assert.equal(matchesRequest(rules, `https://${domain}/`, "main_frame", "redirect"), domains.includes(domain), domain);
+    assert.equal(matchesRequest(rules, `https://${domain}/script.js`, "script", "block"), domains.includes(domain), domain);
+  }
+}
 
 function event() {
   const listeners = [];
@@ -122,7 +155,7 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   const additions = await Promise.all([message("add", "EXAMPLE.COM"), message("add", "example.org")]);
   assert.ok(additions.every(response => response.ok));
   assert.equal(state.domains.length, 2);
-  assert.deepEqual(state.rules[0].condition.requestDomains, ["example.com", "example.org"]);
+  assertRulesFor(state.rules, ["example.com", "example.org"]);
   assert.equal((await message("add", "https://example.com/path")).ok, false);
   assert.equal((await message("add", "*.example.net")).ok, false);
 
@@ -148,16 +181,16 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   await message("list");
   assert.equal((await message("remove", "example.com")).ok, false);
   assert.equal(state.domains.length, 2);
-  assert.ok(state.rules[0].condition.requestDomains.includes("example.com"));
+  assert.ok(matchesRequest(state.rules, "https://example.com/", "main_frame"));
 
   now = deadline;
   api.alarms.onAlarm.emit({ name: "cooldown-deadline" });
   await message("list");
   assert.equal(state.domains.length, 2, "cooldown expiration must not automatically unblock");
-  assert.ok(state.rules[0].condition.requestDomains.includes("example.com"));
+  assert.ok(matchesRequest(state.rules, "https://example.com/", "main_frame"));
   assert.equal((await message("remove", "example.com")).ok, true);
   assert.deepEqual(state.domains, [{ domain: "example.org", addedAt }]);
-  assert.deepEqual(state.rules[0].condition.requestDomains, ["example.org"]);
+  assertRulesFor(state.rules, ["example.org"]);
 
   now += ADDITION_COOLDOWN + 60_000;
   state.alarms.clear();
@@ -175,7 +208,7 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   api.runtime.onStartup.emit();
   await message("list");
   assert.equal(state.alarms.get("cooldown-deadline").scheduledTime, now + ADDITION_COOLDOWN);
-  assert.ok(state.rules[0].condition.requestDomains.includes("example.net"));
+  assert.ok(matchesRequest(state.rules, "https://example.net/", "main_frame"));
 
   state.failRules = true;
   const failedAdd = await message("add", "example.edu");
@@ -185,7 +218,7 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   state.failRules = false;
   api.alarms.onAlarm.emit({ name: "reconcile" });
   await message("list");
-  assert.ok(state.rules[0].condition.requestDomains.includes("example.edu"));
+  assert.ok(matchesRequest(state.rules, "https://example.edu/", "main_frame"));
 
   now += ADDITION_COOLDOWN;
   state.failRules = true;
@@ -193,11 +226,11 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   assert.equal(failedRemoval.ok, false);
   assert.match(failedRemoval.error, /Saved/);
   assert.ok(!state.domains.some(entry => entry.domain === "example.net"));
-  assert.ok(state.rules[0].condition.requestDomains.includes("example.net"));
+  assert.ok(matchesRequest(state.rules, "https://example.net/", "main_frame"));
   state.failRules = false;
   api.alarms.onAlarm.emit({ name: "reconcile" });
   await message("list");
-  assert.deepEqual(state.rules[0].condition.requestDomains, ["example.edu"]);
+  assertRulesFor(state.rules, ["example.edu"]);
 
   state.failStorage = true;
   assert.equal((await message("add", "example.io")).ok, false);
@@ -217,10 +250,20 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   // A fresh module instance simulates a new worker, without startup/onInstalled events.
   api.runtime.onMessage = event();
   api.storage.onChanged = event();
+  // Simulate persisted rules from the old Safari version before the worker wakes.
+  state.rules = [{
+    id: 1, priority: 1,
+    action: { type: "redirect", redirect: { extensionPath: "/blocked.html" } },
+    condition: { requestDomains: ["example.edu"], regexFilter: "^https?://", resourceTypes: ["main_frame"] }
+  }, {
+    id: 2, priority: 1, action: { type: "block" },
+    condition: { requestDomains: ["example.edu"], excludedResourceTypes: ["main_frame"] }
+  }];
   state.alarms.clear();
   await import(`../background.js?wake=2&namespace=${namespace}`);
   await message("list");
   assert.equal(state.domains[0].addedAt, now);
+  assertRulesFor(state.rules, ["example.edu"]);
   assert.equal((await message("remove", "example.edu")).ok, false);
   assert.equal(state.alarms.get("cooldown-deadline").scheduledTime, now + ADDITION_COOLDOWN);
 
