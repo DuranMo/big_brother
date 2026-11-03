@@ -2,7 +2,7 @@
 
 an extension that makes sure you (i) aren't slacking off
 
-## Install
+## Chrome
 
 1. download the big_brother folder
 2. open extensions on chrome or edge
@@ -10,6 +10,14 @@ an extension that makes sure you (i) aren't slacking off
 4. click load unpacked and add the folder
 
 Allow access to all websites when prompted so redirects can work.
+
+### Safari (Mac)
+
+1. in safari settings --> advanced, turn on "show features for web developers"
+2. in developer, allow unsigned extensions and add this folder as a temporary extension
+3. enable big_brother in settings --> extensions and allow access to all websites
+
+
 
 ## Use
 
