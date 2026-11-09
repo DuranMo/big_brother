@@ -5,14 +5,59 @@ html {
 }
 body {
   margin: 0;
-  min-height: 100%;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
+  height: 100%;
   font: 400 18px / 1.4 "Times New Roman", Times, serif;
 }
-p {
-  margin: 0;
-  padding: 0 24px;
+main {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  padding: 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   text-align: center;
+}
+figure {
+  margin: 0 auto;
+  width: 100%;
+  max-width: 1100px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+img {
+  grid-area: 1 / 1;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+[hidden] { display: none !important; }
+figcaption { grid-area: 2 / 1; min-width: 0; max-width: 1000px; margin: 0 auto; line-height: 1.3; overflow-wrap: anywhere; }
+h1 { font-size: 20px; font-weight: 400; margin: 0 0 3px; }
+p { margin: 0; }
+#painting-artist { font-size: 15px; }
+#painting-context, #painting-measurements { margin-top: 4px; font-size: 12px; }
+#painting-description, #painting-fact { margin-top: 8px; font-size: 14px; }
+.credit { margin-top: 8px; font-size: 12px; opacity: 0.7; }
+.message { flex: none; }
+#image-fallback { grid-area: 1 / 1; place-self: center; font-size: 16px; }
+main:has(figure[hidden]) { justify-content: center; }
+@media (max-width: 600px), (max-height: 650px) {
+  main { padding: 12px; gap: 8px; }
+  figure { gap: 8px; }
+  figcaption { line-height: 1.2; }
+  h1 { font-size: 16px; }
+  #painting-artist { font-size: 12px; }
+  #painting-context, #painting-measurements, .credit { font-size: 10px; }
+  #painting-description, #painting-fact { font-size: 11px; margin-top: 6px; }
 }

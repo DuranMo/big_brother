@@ -1,6 +1,15 @@
 import { normalizeDomain, buildRules, ADDITION_COOLDOWN } from "./domains.js";
+import { createDailyPainting } from "./daily-painting.js";
 
 const extension = globalThis.browser ?? globalThis.chrome;
+const getDailyPainting = createDailyPainting({
+  storage: extension.storage.local,
+  async loadCatalog() {
+    const response = await fetch(extension.runtime.getURL("paintings.json"));
+    if (!response.ok) throw new Error("Could not load the painting catalog.");
+    return response.json();
+  }
+});
 const DEADLINE_ALARM = "cooldown-deadline";
 const RETRY_ALARM = "reconcile";
 let queue = Promise.resolve();
@@ -84,6 +93,14 @@ async function handleMessage(message) {
 }
 
 extension.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "dailyPainting" && sender.id === extension.runtime.id &&
+      sender.url === extension.runtime.getURL("blocked.html")) {
+    getDailyPainting().then(
+      selection => sendResponse({ ok: true, ...selection }),
+      error => sendResponse({ ok: false, error: error.message })
+    );
+    return true;
+  }
   // The web-accessible blocked page cannot mutate the list.
   if (sender.id !== extension.runtime.id || sender.url !== extension.runtime.getURL("popup.html") ||
       !["list", "add", "remove"].includes(message?.type)) return false;

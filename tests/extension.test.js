@@ -96,10 +96,11 @@ function mockChrome() {
       local: {
         async get() {
           if (state.failStorage) throw new Error("Storage unavailable");
-          return { domains: structuredClone(state.domains) };
+          return { domains: structuredClone(state.domains), dailyPainting: structuredClone(state.dailyPainting) };
         },
-        async set({ domains }) {
+        async set({ domains, dailyPainting }) {
           if (state.failStorage) throw new Error("Storage unavailable");
+          if (dailyPainting) { state.dailyPainting = structuredClone(dailyPainting); return; }
           const oldValue = state.domains;
           state.domains = structuredClone(domains);
           changed.emit({ domains: { oldValue, newValue: domains } }, "local");
@@ -136,21 +137,35 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   const { api, state, message } = mockChrome();
   const originalChrome = globalThis.chrome;
   const originalBrowser = globalThis.browser;
+  const originalFetch = globalThis.fetch;
   const originalNow = Date.now;
   const originalError = console.error;
   let now = 1_800_000_000_000;
   Date.now = () => now;
   globalThis.chrome = namespace === "chrome" ? api : undefined;
   globalThis.browser = namespace === "browser" ? api : undefined;
+  let catalogLoads = 0;
+  globalThis.fetch = async url => {
+    assert.equal(url, api.runtime.getURL("paintings.json"));
+    catalogLoads++;
+    return { ok: true, json: async () => [{ id: 1, title: "A painting" }] };
+  };
   console.error = () => {}; // Expected API failure cases below.
   t.after(() => {
     Date.now = originalNow;
     globalThis.chrome = originalChrome;
     globalThis.browser = originalBrowser;
+    globalThis.fetch = originalFetch;
     console.error = originalError;
   });
   await import(`../background.js?namespace=${namespace}`);
   assert.deepEqual((await message("list")).domains, []);
+  const blockedSender = { id: api.runtime.id, url: api.runtime.getURL("blocked.html") };
+  assert.equal(await message("dailyPainting"), undefined, "only the blocked page can request artwork");
+  const paintings = await Promise.all(Array.from({ length: 5 }, () => message("dailyPainting", undefined, blockedSender)));
+  assert.ok(paintings.every(response => response.ok && response.painting.id === 1));
+  assert.equal(catalogLoads, 1);
+  assert.deepEqual(state.domains, []);
 
   const additions = await Promise.all([message("add", "EXAMPLE.COM"), message("add", "example.org")]);
   assert.ok(additions.every(response => response.ok));
@@ -290,7 +305,7 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
 });
 }
 
-test("manifest paths exist and the blocked page has only the requested sentence", async () => {
+test("manifest paths exist and the blocked page preserves the message without controls", async () => {
   const root = new URL("../", import.meta.url);
   const manifest = JSON.parse(await readFile(new URL("manifest.json", root), "utf8"));
   assert.equal(manifest.manifest_version, 3);
@@ -301,6 +316,7 @@ test("manifest paths exist and the blocked page has only the requested sentence"
   }
   const html = await readFile(new URL("blocked.html", root), "utf8");
   const body = html.match(/<body>([\s\S]*?)<\/body>/)[1];
-  assert.equal(body.replace(/<[^>]+>/g, "").trim(), "Not all those who wander are lost");
-  assert.ok(!/<(button|a|img|nav)\b/.test(body));
+  assert.match(body, /class="message">Not all those who wander are lost<\/p>/);
+  assert.ok(!/<(button|a|nav)\b/.test(body));
+  assert.match(body, /<img[^>]+id="painting"/);
 });

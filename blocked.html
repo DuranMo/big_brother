@@ -5,6 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title> </title>
   <link rel="stylesheet" href="blocked.css">
+  <script src="blocked.js" type="module"></script>
 </head>
-<body><p>Not all those who wander are lost</p></body>
+<body>
+  <main>
+    <p class="message">Not all those who wander are lost</p>
+    <figure id="artwork" hidden>
+      <img id="painting" hidden alt="" referrerpolicy="no-referrer">
+      <p id="image-fallback" hidden>The painting image is unavailable.</p>
+      <figcaption>
+        <h1 id="painting-title"></h1>
+        <p id="painting-artist"></p>
+        <p id="painting-context" hidden></p>
+        <p id="painting-measurements" hidden></p>
+        <p id="painting-description" hidden></p>
+        <p id="painting-fact" hidden></p>
+        <p class="credit">The Cleveland Museum of Art · CC0</p>
+      </figcaption>
+    </figure>
+  </main>
+</body>
 </html>

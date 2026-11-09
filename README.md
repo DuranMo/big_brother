@@ -23,3 +23,7 @@ Allow access to all websites when prompted so redirects can work.
 
 Add websites to block them & remove them to unblock them! Once you add a website, though, there is a 24
 hour period in which you cannot remove it.
+
+## Daily painting
+
+shows cool paintings daily!
