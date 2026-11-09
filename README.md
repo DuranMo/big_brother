@@ -1,4 +1,4 @@
-<img width="128" height="128" alt="image" src="https://github.com/user-attachments/assets/5dda9ac9-f376-4311-9279-85848d1c97d0" />
+<img width="128" height="128" alt="image" src="https://github.com/user-attachments/assets/bd714723-6f64-4964-8deb-d72eb9036e0e" />
 
 # Big Brother
 
