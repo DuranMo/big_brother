@@ -23,7 +23,7 @@ def main():
     skip = 0
     while True:
         query = urllib.parse.urlencode({
-            "cc0": 1, "type": "Painting", "has_image": 1,
+            "cc0": 1, "has_image": 1,
             "fields": FIELDS, "limit": 1000, "skip": skip,
         })
         request = urllib.request.Request(API + "?" + query, headers={
@@ -35,7 +35,7 @@ def main():
         for art in artworks:
             image = (art.get("images") or {}).get("web") or {}
             url = urllib.parse.urlparse(image.get("url", ""))
-            if art.get("type") != "Painting" or art.get("share_license_status") != "CC0":
+            if art.get("share_license_status") != "CC0":
                 continue
             if url.scheme != "https" or url.hostname != "openaccess-cdn.clevelandart.org":
                 continue
@@ -46,6 +46,7 @@ def main():
                        for creator in art.get("creators", []) if creator.get("use_in_caption") is not False]
             painting = {
                 "id": art["id"], "title": plain(art.get("title")) or "Untitled",
+                "type": plain(art.get("type")) or "Artwork",
                 "artist": ", ".join(filter(None, artists)) or "Unknown artist",
                 "date": plain(art.get("creation_date")) or "Date unknown",
                 "description": plain(art.get("description")),
@@ -55,7 +56,14 @@ def main():
                 "measurements": plain(art.get("measurements")),
                 "image": image["url"], "width": width, "height": height, "license": "CC0",
             }
+            # Keep the museum's text complete; choose concise records for the
+            # single-screen page rather than cutting off long descriptions.
+            details = ("title", "artist", "date", "type", "description", "fact", "culture", "medium", "measurements")
+            if sum(len(painting[key]) for key in details) > 2000:
+                continue
             score = (len(painting["fact"]) >= 40) + (len(painting["description"]) >= 80)
+            if not painting["description"] and not painting["fact"]:
+                continue
             score += bool(art.get("is_highlight"))
             # Stable tie-breaking spreads the selection throughout the collection.
             tie = hashlib.sha256(str(art["id"]).encode()).hexdigest()
@@ -65,11 +73,24 @@ def main():
         if not artworks or skip >= page["info"]["total"]:
             break
     ranked = sorted(eligible.values(), key=lambda item: (-item[0], item[1]))
-    catalog = [item[2] for item in ranked[:COUNT]]
+    # Round-robin across art forms so plentiful paintings/prints do not crowd out
+    # sculpture, textiles, ceramics, photographs, and the rest of the collection.
+    groups = {}
+    for _, _, artwork in ranked:
+        groups.setdefault(artwork["type"], []).append(artwork)
+    catalog = []
+    index = 0
+    while len(catalog) < COUNT:
+        batch = [group[index] for group in groups.values() if index < len(group)]
+        if not batch:
+            break
+        catalog.extend(batch[:COUNT - len(catalog)])
+        index += 1
     if len(catalog) < COUNT:
-        raise RuntimeError("Not enough eligible paintings; existing catalog was not changed.")
+        raise RuntimeError("Not enough eligible artworks; existing catalog was not changed.")
     OUTPUT.write_text(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-    print("Wrote {} CC0 paintings ({} KiB)".format(len(catalog), OUTPUT.stat().st_size // 1024))
+    print("Wrote {} CC0 artworks across {} types ({} KiB)".format(
+        len(catalog), len({art["type"] for art in catalog}), OUTPUT.stat().st_size // 1024))
 
 
 if __name__ == "__main__":

@@ -6,39 +6,41 @@ export function nextMidnight(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
 }
 
-// The background owns this queue; pages never read-modify-write selection state.
-const CATALOG_VERSION = 2;
+// A fixed ordering plus the local calendar day gives every device the same
+// artwork, without accounts, network calls, or device-specific browsing history.
+function rotationKey(id) {
+  let hash = 2166136261;
+  for (const char of `big_brother:${id}`) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return hash >>> 0;
+}
 
-export function createDailyPainting({ storage, loadCatalog, now = () => new Date(), random = Math.random }) {
+export function selectDailyArtwork(catalog, date) {
+  if (!catalog.length) throw new Error("The artwork catalog is empty.");
+  const ordered = [...catalog].sort((a, b) => rotationKey(a.id) - rotationKey(b.id) || a.id - b.id);
+  // UTC is used only for calendar arithmetic; the year/month/day remain local.
+  // This advances by one on DST changes and skips no entries in a full cycle.
+  const day = Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000);
+  return ordered[((day % ordered.length) + ordered.length) % ordered.length];
+}
+
+// The background owns this queue; pages never read-modify-write selection state.
+const CATALOG_VERSION = 4;
+
+export function createDailyPainting({ storage, loadCatalog, now = () => new Date() }) {
   let queue = Promise.resolve();
   let catalog;
   async function select() {
     const { dailyPainting } = await storage.get("dailyPainting");
-    const date = localDateKey(now());
+    const today = now();
+    const date = localDateKey(today);
     const isToday = dailyPainting?.date === date && dailyPainting.painting;
     if (isToday && dailyPainting.catalogVersion === CATALOG_VERSION) return dailyPainting;
     // Keep the bundled catalog in memory only while the worker is alive.
     catalog ??= await loadCatalog();
-    if (!catalog.length) throw new Error("The painting catalog is empty.");
-    if (isToday) {
-      // Enrich today's stored selection after an update without changing the artwork.
-      const selection = {
-        ...dailyPainting,
-        painting: catalog.find(painting => painting.id === dailyPainting.painting.id) ?? dailyPainting.painting,
-        catalogVersion: CATALOG_VERSION
-      };
-      await storage.set({ dailyPainting: selection });
-      return selection;
-    }
+    if (!catalog.length) throw new Error("The artwork catalog is empty.");
+    const painting = selectDailyArtwork(catalog, today);
     const ids = new Set(catalog.map(painting => painting.id));
-    let history = (dailyPainting?.history ?? []).filter(id => ids.has(id));
-    const seen = new Set(history);
-    let available = catalog.filter(painting => !seen.has(painting.id));
-    if (!available.length) {
-      history = [];
-      available = catalog.filter(painting => catalog.length === 1 || painting.id !== dailyPainting?.painting.id);
-    }
-    const painting = available[Math.floor(random() * available.length)];
+    const history = (dailyPainting?.history ?? []).filter(id => ids.has(id) && id !== painting.id);
     const selection = { date, painting, history: [...history, painting.id], catalogVersion: CATALOG_VERSION };
     await storage.set({ dailyPainting: selection });
     return selection;

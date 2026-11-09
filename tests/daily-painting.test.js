@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { createDailyPainting, localDateKey } from "../daily-painting.js";
+import { createDailyPainting, localDateKey, selectDailyArtwork } from "../daily-painting.js";
 
 const catalog = [1, 2, 3].map(id => ({
   id, title: `Painting ${id}`, artist: "An artist", date: "1900",
@@ -11,7 +11,7 @@ const catalog = [1, 2, 3].map(id => ({
 }));
 catalog[1] = {
   ...catalog[1], description: "A complete museum description.", fact: "A separate museum fact.",
-  culture: "Japan, Muromachi period", medium: "Ink on paper", measurements: "40 x 60 cm"
+  type: "Sculpture", culture: "Japan, Muromachi period", medium: "Carved wood", measurements: "40 x 60 cm"
 };
 
 function memoryStorage() {
@@ -28,7 +28,7 @@ test("one persistent painting per local day, including concurrent tabs and worke
   let date = new Date(2026, 10, 8, 0, 0, 0);
   let loads = 0;
   const options = {
-    storage, now: () => date, random: () => 0,
+    storage, now: () => date,
     loadCatalog: async () => { loads++; return catalog; }
   };
   const get = createDailyPainting(options);
@@ -65,28 +65,54 @@ test("selection retries after storage/catalog failures and supports a single pai
   assert.equal((await tomorrow()).painting.id, 1);
   const originalSet = storage.set;
   storage.set = async () => { throw new Error("storage error"); };
-  const later = createDailyPainting({ storage, loadCatalog: async () => catalog, now: () => new Date(2099, 0, 2), random: () => 0 });
+  const later = createDailyPainting({ storage, loadCatalog: async () => catalog, now: () => new Date(2099, 0, 2) });
   await assert.rejects(later(), /storage error/);
   storage.set = originalSet;
   assert.equal((await later()).painting.id, 2);
 });
 
-test("catalog updates enrich today's painting without changing its selection or history", async () => {
-  const storage = memoryStorage();
+test("independent devices and legacy random selections converge on the same daily artwork", async () => {
+  const first = memoryStorage();
+  const second = memoryStorage();
   const today = new Date(2026, 10, 8);
-  storage.data.dailyPainting = {
-    date: localDateKey(today), painting: { id: 2, title: "Painting 2", description: "Old shortened text" }, history: [1, 2]
+  first.data.dailyPainting = {
+    date: localDateKey(today), painting: catalog[1], history: [2, 3], catalogVersion: 3
   };
-  const updated = createDailyPainting({ storage, loadCatalog: async () => catalog, now: () => today });
-  const selection = await updated();
-  assert.equal(selection.painting.id, 2);
-  assert.equal(selection.painting.description, catalog[1].description);
-  assert.equal(selection.painting.culture, "Japan, Muromachi period");
-  assert.deepEqual(selection.history, [1, 2]);
+  const onFirst = createDailyPainting({ storage: first, loadCatalog: async () => catalog, now: () => today });
+  const onSecond = createDailyPainting({ storage: second, loadCatalog: async () => [...catalog].reverse(), now: () => today });
+  const [a, b] = await Promise.all([onFirst(), onSecond()]);
+  assert.equal(a.painting.id, 1);
+  assert.deepEqual(a.painting, b.painting, "device history and input catalog order cannot affect the choice");
+  assert.deepEqual(first.data.domains, second.data.domains);
   const restarted = createDailyPainting({
-    storage, now: () => today, loadCatalog: () => { throw new Error("must use enriched stored selection"); }
+    storage: first, now: () => today, loadCatalog: () => { throw new Error("must use persisted selection"); }
   });
-  assert.deepEqual(await restarted(), selection);
+  assert.deepEqual(await restarted(), a);
+});
+
+test("an old cached artwork migrates to the shared rotation immediately", async () => {
+  const storage = memoryStorage();
+  const date = new Date(2026, 10, 8);
+  storage.data.dailyPainting = { date: localDateKey(date), painting: catalog[0], history: [1], catalogVersion: 2 };
+  const get = createDailyPainting({ storage, now: () => date, loadCatalog: async () => catalog.slice(1) });
+  assert.equal((await get()).painting.id, 3);
+  assert.deepEqual(storage.data.dailyPainting.history, [3]);
+});
+
+test("the date rotation exhausts the catalog before repeating and survives skipped/backward dates", async () => {
+  const artworks = JSON.parse(await readFile(new URL("../paintings.json", import.meta.url), "utf8"));
+  const ids = Array.from({ length: artworks.length }, (_, day) =>
+    selectDailyArtwork(artworks, new Date(2026, 0, 1 + day)).id);
+  assert.equal(new Set(ids).size, artworks.length);
+  assert.equal(selectDailyArtwork(artworks, new Date(2026, 0, 1 + artworks.length)).id, ids[0]);
+  const storage = memoryStorage();
+  let date = new Date(2026, 0, 1);
+  const get = createDailyPainting({ storage, loadCatalog: async () => artworks, now: () => date });
+  assert.equal((await get()).painting.id, ids[0]);
+  date = new Date(2026, 0, 90);
+  assert.equal((await get()).painting.id, ids[89]);
+  date = new Date(2026, 0, 1);
+  assert.equal((await get()).painting.id, ids[0]);
 });
 
 test("local date and midnight follow the user's timezone and daylight saving changes", () => {
@@ -108,10 +134,31 @@ test("local date and midnight follow the user's timezone and daylight saving cha
   assert.deepEqual(JSON.parse(child.stdout), ["2026-11-08", 23, 25]);
 });
 
-test("bundled catalog contains 500 unique, documented CC0 museum paintings", async () => {
+test("the same local calendar date selects the same artwork across timezones", () => {
+  const moduleURL = new URL("../daily-painting.js", import.meta.url).href;
+  const script = `
+    import { localDateKey, selectDailyArtwork } from ${JSON.stringify(moduleURL)};
+    const date = new Date(2026, 10, 8, 12);
+    console.log(JSON.stringify([localDateKey(date), selectDailyArtwork([{id:1},{id:2},{id:3}], date).id]));
+  `;
+  for (const timezone of ["America/Chicago", "Asia/Tokyo"]) {
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, TZ: timezone }, encoding: "utf8"
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.deepEqual(JSON.parse(child.stdout), ["2026-11-08", 1]);
+  }
+});
+
+test("bundled catalog contains 500 unique, documented CC0 artworks across art forms", async () => {
   const paintings = JSON.parse(await readFile(new URL("../paintings.json", import.meta.url), "utf8"));
   assert.equal(paintings.length, 500);
   assert.equal(new Set(paintings.map(painting => painting.id)).size, paintings.length);
+  const types = new Set(paintings.map(painting => painting.type));
+  assert.ok(types.has("Painting"));
+  assert.ok(types.has("Sculpture"));
+  assert.ok(types.has("Photograph"));
+  assert.ok(types.size >= 10, "selection spans many different art forms");
   for (const painting of paintings) {
     assert.equal(painting.license, "CC0");
     assert.equal(new URL(painting.image).origin, "https://openaccess-cdn.clevelandart.org");
@@ -151,7 +198,7 @@ test("blocked page keeps metadata on image failure, rotates at midnight and surv
   globalThis.clearTimeout = () => {};
   globalThis.browser = undefined;
   let unavailable = false;
-  const get = createDailyPainting({ storage: memoryStorage(), loadCatalog: async () => catalog, random: () => 0 });
+  const get = createDailyPainting({ storage: memoryStorage(), loadCatalog: async () => catalog });
   globalThis.chrome = { runtime: { sendMessage: async () => {
     if (unavailable) return { ok: false, error: "Storage unavailable" };
     return { ok: true, ...await get() };
@@ -180,7 +227,7 @@ test("blocked page keeps metadata on image failure, rotates at midnight and surv
   assert.equal(elements["painting-title"].textContent, "Painting 2");
   assert.equal(elements["painting-description"].textContent, "A complete museum description.");
   assert.equal(elements["painting-fact"].textContent, "Did you know? A separate museum fact.");
-  assert.equal(elements["painting-context"].textContent, "Japan, Muromachi period · Ink on paper");
+  assert.equal(elements["painting-context"].textContent, "Sculpture · Japan, Muromachi period · Carved wood");
   assert.equal(elements["painting-measurements"].textContent, "40 x 60 cm");
   assert.equal(elements["painting-fact"].hidden, false);
   elements.painting.onload();

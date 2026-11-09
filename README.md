@@ -24,6 +24,8 @@ Allow access to all websites when prompted so redirects can work.
 Add websites to block them & remove them to unblock them! Once you add a website, though, there is a 24
 hour period in which you cannot remove it.
 
-## Daily painting
+## Daily art
 
-shows cool paintings daily!
+shows cool art (from the Cleveland Museum of Art)
+
+daily artwork syncs across all devices, so your daily art is the same as mine

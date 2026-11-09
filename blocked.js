@@ -15,12 +15,12 @@ async function refresh() {
     loading = true;
     try {
       const selection = await extension.runtime.sendMessage({ type: "dailyPainting" });
-      if (!selection?.ok) throw new Error(selection?.error || "Painting unavailable.");
+      if (!selection?.ok) throw new Error(selection?.error || "Artwork unavailable.");
       const { painting } = selection;
       document.querySelector("#painting-title").textContent = painting.title;
       document.querySelector("#painting-artist").textContent = `${painting.artist} · ${painting.date}`;
       for (const [id, text] of [
-        ["painting-context", [painting.culture, painting.medium].filter(Boolean).join(" · ")],
+        ["painting-context", [painting.type, painting.culture, painting.medium].filter(Boolean).join(" · ")],
         ["painting-measurements", painting.measurements],
         ["painting-description", painting.description],
         ["painting-fact", painting.fact ? `Did you know? ${painting.fact}` : ""]
@@ -39,7 +39,7 @@ async function refresh() {
       displayedDate = selection.date;
     } catch (error) {
       // The original message remains useful even if storage or the catalog fails.
-      console.error("big_brother painting:", error);
+      console.error("big_brother artwork:", error);
       artwork.hidden = true;
     } finally {
       loading = false;

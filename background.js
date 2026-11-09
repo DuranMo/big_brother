@@ -6,7 +6,7 @@ const getDailyPainting = createDailyPainting({
   storage: extension.storage.local,
   async loadCatalog() {
     const response = await fetch(extension.runtime.getURL("paintings.json"));
-    if (!response.ok) throw new Error("Could not load the painting catalog.");
+    if (!response.ok) throw new Error("Could not load the artwork catalog.");
     return response.json();
   }
 });
