@@ -5,11 +5,16 @@ body {
   color: #222;
   font: 14px system-ui, sans-serif;
 }
-form, li { display: flex; align-items: center; gap: 8px; }
+form, .domain-row, .allowed-paths li { display: flex; align-items: center; gap: 8px; }
 input { flex: 1; min-width: 0; padding: 5px; }
 button { padding: 4px 8px; cursor: pointer; }
 ul { list-style: none; padding: 0; margin: 12px 0 0; }
 li { margin-top: 8px; }
-li > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.domain-row > span:first-child, .allowed-paths code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+details { margin-top: 5px; }
+summary { cursor: pointer; font-size: 12px; color: #555; }
+details form { margin-top: 6px; }
+.allowed-paths { margin-top: 6px; }
+.allowed-paths code { font-size: 12px; }
 time { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
 #error { color: #9b2424; margin: 10px 0 0; }

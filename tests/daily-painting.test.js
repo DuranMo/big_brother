@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { createDailyPainting, localDateKey, selectDailyArtwork } from "../daily-painting.js";
+import { createDailyPainting, localDateKey, selectDailyArtwork, isDrawnArtwork } from "../daily-painting.js";
 
 const catalog = [1, 2, 3].map(id => ({
   id, title: `Painting ${id}`, artist: "An artist", date: "1900",
@@ -104,6 +104,11 @@ test("the date rotation exhausts the catalog before repeating and survives skipp
   const ids = Array.from({ length: artworks.length }, (_, day) =>
     selectDailyArtwork(artworks, new Date(2026, 0, 1 + day)).id);
   assert.equal(new Set(ids).size, artworks.length);
+  assert.equal(artworks.filter(isDrawnArtwork).length, 400);
+  for (let day = 0; day < artworks.length; day += 5) {
+    const fiveDays = Array.from({ length: 5 }, (_, offset) => selectDailyArtwork(artworks, new Date(2026, 0, 1 + day + offset)));
+    assert.equal(fiveDays.filter(isDrawnArtwork).length, 4, "each five-day span favors drawn art four to one");
+  }
   assert.equal(selectDailyArtwork(artworks, new Date(2026, 0, 1 + artworks.length)).id, ids[0]);
   const storage = memoryStorage();
   let date = new Date(2026, 0, 1);

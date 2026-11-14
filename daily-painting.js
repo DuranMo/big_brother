@@ -14,17 +14,30 @@ function rotationKey(id) {
   return hash >>> 0;
 }
 
+const DRAWN_TYPES = new Set(["Painting", "Drawing", "Print", "Calligraphy", "Portrait Miniature", "Monotype", "Miniature", "Woodblock", "Illumination"]);
+
+export function isDrawnArtwork(artwork) {
+  return DRAWN_TYPES.has(artwork.type);
+}
+
 export function selectDailyArtwork(catalog, date) {
   if (!catalog.length) throw new Error("The artwork catalog is empty.");
   const ordered = [...catalog].sort((a, b) => rotationKey(a.id) - rotationKey(b.id) || a.id - b.id);
+  const drawn = ordered.filter(isDrawnArtwork);
+  const other = ordered.filter(artwork => !isDrawnArtwork(artwork));
+  const rotation = [];
+  for (let i = 0, j = 0; i < drawn.length || j < other.length; i += 4, j++) {
+    rotation.push(...drawn.slice(i, i + 4));
+    if (j < other.length) rotation.push(other[j]);
+  }
   // UTC is used only for calendar arithmetic; the year/month/day remain local.
   // This advances by one on DST changes and skips no entries in a full cycle.
   const day = Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000);
-  return ordered[((day % ordered.length) + ordered.length) % ordered.length];
+  return rotation[((day % rotation.length) + rotation.length) % rotation.length];
 }
 
 // The background owns this queue; pages never read-modify-write selection state.
-const CATALOG_VERSION = 4;
+const CATALOG_VERSION = 5;
 
 export function createDailyPainting({ storage, loadCatalog, now = () => new Date() }) {
   let queue = Promise.resolve();

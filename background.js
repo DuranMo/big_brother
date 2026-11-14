@@ -1,4 +1,4 @@
-import { normalizeDomain, buildRules, ADDITION_COOLDOWN } from "./domains.js";
+import { normalizeDomain, normalizeAllowedPath, buildRules, createNavigationCheck, ADDITION_COOLDOWN } from "./domains.js";
 import { createDailyPainting } from "./daily-painting.js";
 
 const extension = globalThis.browser ?? globalThis.chrome;
@@ -13,6 +13,8 @@ const getDailyPainting = createDailyPainting({
 const DEADLINE_ALARM = "cooldown-deadline";
 const RETRY_ALARM = "reconcile";
 let queue = Promise.resolve();
+let navigationCheck = () => false;
+let navigationSignature;
 
 // Every event uses the same queue, so simultaneous popup requests cannot lose writes.
 function enqueue(task) {
@@ -50,9 +52,14 @@ async function reconcile() {
   }
 
   const rules = buildRules(entries);
+  const signature = canonical(rules);
+  if (signature !== navigationSignature) {
+    navigationCheck = createNavigationCheck(rules);
+    navigationSignature = signature;
+  }
   const current = await extension.declarativeNetRequest.getDynamicRules();
   // Chrome may return object keys in a different order. Compare by value.
-  if (canonical(current) !== canonical(rules)) {
+  if (canonical(current) !== signature) {
     await extension.declarativeNetRequest.updateDynamicRules({
       removeRuleIds: current.map(rule => rule.id), addRules: rules
     });
@@ -76,12 +83,23 @@ async function handleMessage(message) {
   if (message.type === "add") {
     if (existing) throw new Error("That domain is already blocked.");
     entries = [...entries, { domain, addedAt: Date.now() }];
-  } else {
+  } else if (message.type === "remove") {
     if (!existing) throw new Error("That domain is no longer in the list.");
     if (Date.now() < existing.addedAt + ADDITION_COOLDOWN) {
       throw new Error("This domain cannot be removed until 24 hours after it was added.");
     }
     entries = entries.filter(entry => entry.domain !== domain);
+  } else {
+    if (!existing) throw new Error("Add the domain before editing its allowed paths.");
+    const path = normalizeAllowedPath(message.path, domain);
+    let allowedPaths = existing.allowedPaths ?? [];
+    if (message.type === "allowPath") {
+      if (allowedPaths.includes(path)) throw new Error("That path is already allowed.");
+      allowedPaths = [...allowedPaths, path];
+    } else {
+      allowedPaths = allowedPaths.filter(value => value !== path);
+    }
+    entries = entries.map(entry => entry === existing ? { ...entry, allowedPaths } : entry);
   }
   await extension.storage.local.set({ domains: entries });
   try {
@@ -103,7 +121,7 @@ extension.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   // The web-accessible blocked page cannot mutate the list.
   if (sender.id !== extension.runtime.id || sender.url !== extension.runtime.getURL("popup.html") ||
-      !["list", "add", "remove"].includes(message?.type)) return false;
+      !["list", "add", "remove", "allowPath", "removeAllowedPath"].includes(message?.type)) return false;
   enqueue(() => handleMessage(message)).then(
     domains => sendResponse({ ok: true, domains }),
     error => sendResponse({ ok: false, error: error.message || "Browser operation failed. Please retry." })
@@ -118,6 +136,20 @@ extension.runtime.onStartup.addListener(() => { enqueue(reconcile); });
 extension.runtime.onInstalled.addListener(() => { enqueue(reconcile); });
 extension.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.domains) enqueue(reconcile);
+});
+
+// Covers pushState/replaceState and history navigation without polling pages.
+extension.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  const url = changeInfo.url;
+  if (!url || !/^https?:\/\//i.test(url)) return;
+  enqueue(async () => {
+    if (!navigationCheck(url)) return;
+    // The user may already have navigated elsewhere or closed the tab.
+    let tab;
+    try { tab = await extension.tabs.get(tabId); } catch { return; }
+    if (tab.url !== url || (tab.pendingUrl && tab.pendingUrl !== url)) return;
+    await extension.tabs.update(tabId, { url: extension.runtime.getURL("blocked.html") });
+  });
 });
 // Runs on every worker wake, including wakes after missing alarms or a restart.
 enqueue(reconcile);

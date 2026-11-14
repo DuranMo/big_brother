@@ -13,16 +13,19 @@ function showError(message = "") {
   error.hidden = !message;
 }
 
-async function request(type, domain) {
-  const response = await extension.runtime.sendMessage({ type, domain });
+async function request(type, domain, path) {
+  const response = await extension.runtime.sendMessage({ type, domain, path });
   if (!response?.ok) throw new Error(response?.error || "Could not contact the background worker.");
   return response.domains;
 }
 
 function render(entries) {
+  const openDomains = new Set([...list.querySelectorAll("details[open]")].map(details => details.dataset.domain));
   list.replaceChildren();
   for (const entry of entries) {
-    const row = document.createElement("li");
+    const item = document.createElement("li");
+    const row = document.createElement("div");
+    row.className = "domain-row";
     const label = document.createElement("span");
     label.textContent = entry.domain;
     row.append(label);
@@ -42,7 +45,48 @@ function render(entries) {
       time.title = `Can remove after: ${new Date(removableAt).toLocaleString()}`;
       row.append(time);
     }
-    list.append(row);
+    const details = document.createElement("details");
+    details.dataset.domain = entry.domain;
+    details.open = openDomains.has(entry.domain);
+    const summary = document.createElement("summary");
+    const paths = entry.allowedPaths ?? [];
+    summary.textContent = `Allowed paths (${paths.length})`;
+    details.append(summary);
+    const pathForm = document.createElement("form");
+    const pathInput = document.createElement("input");
+    pathInput.placeholder = "/section/*";
+    pathInput.required = true;
+    pathInput.autocomplete = "off";
+    pathInput.spellcheck = false;
+    pathInput.setAttribute("aria-label", `Allowed path on ${entry.domain}`);
+    const allow = document.createElement("button");
+    allow.type = "submit";
+    allow.textContent = "Allow";
+    allow.disabled = busy;
+    pathForm.append(pathInput, allow);
+    pathForm.addEventListener("submit", event => {
+      event.preventDefault();
+      mutate("allowPath", entry.domain, pathInput.value);
+    });
+    details.append(pathForm);
+    const pathList = document.createElement("ul");
+    pathList.className = "allowed-paths";
+    for (const path of paths) {
+      const pathRow = document.createElement("li");
+      const text = document.createElement("code");
+      text.textContent = path;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Remove";
+      remove.disabled = busy;
+      remove.setAttribute("aria-label", `Remove allowed path ${path} on ${entry.domain}`);
+      remove.addEventListener("click", () => mutate("removeAllowedPath", entry.domain, path));
+      pathRow.append(text, remove);
+      pathList.append(pathRow);
+    }
+    details.append(pathList);
+    item.append(row, details);
+    list.append(item);
   }
   updateCountdowns();
 }
@@ -60,13 +104,13 @@ async function refresh() {
   }
 }
 
-async function mutate(type, domain) {
+async function mutate(type, domain, path) {
   if (busy) return;
   busy = true;
   document.querySelectorAll("button").forEach(button => { button.disabled = true; });
   showError();
   try {
-    const entries = await request(type, domain);
+    const entries = await request(type, domain, path);
     if (type === "add") input.value = "";
     render(entries);
   } catch (failure) {

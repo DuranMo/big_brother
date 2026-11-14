@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { normalizeDomain, buildRules, ADDITION_COOLDOWN } from "../domains.js";
+import { normalizeDomain, normalizeAllowedPath, buildRules, createNavigationCheck, ADDITION_COOLDOWN } from "../domains.js";
 
 test("domain normalization and validation", () => {
   for (const [input, expected] of [
@@ -59,11 +59,44 @@ test("rules use domain boundaries and cannot redirect the extension itself", () 
   assertRulesFor(many, ["example.com", "example.org"]);
 });
 
+test("allowed paths normalize URLs, reject broad wildcards and stay on the blocked domain", () => {
+  for (const [value, expected] of [
+    ["/section/", "/section"], [" /section/* ", "/section/*"],
+    ["https://www.example.com/section/*", "/section/*"], ["/a+b", "/a+b"], ["/", "/"]
+  ]) assert.equal(normalizeAllowedPath(value, "example.com"), expected);
+  for (const value of ["", null, "/*", "*", "/foo*", "/foo/*/bar", "/**", "/foo?bar=1", "/foo#bar",
+    "https://other.org/section/*", "//other.org/section/*", "https://example.com.evil.org/foo",
+    "https://user@example.com/foo", "https://example.com:8080/foo", "ftp://example.com/foo", "/foo\\bar"])
+    assert.throws(() => normalizeAllowedPath(value, "example.com"), undefined, String(value));
+});
+
+test("path allow rules have priority without allowing neighboring paths or unrelated domains", () => {
+  const rules = buildRules([{ domain: "example.com", allowedPaths: ["/section/*", "/exact", "/a+b"] }]);
+  const action = url => rules.filter(rule => matchesRequest([rule], url, "main_frame"))
+    .sort((a, b) => b.priority - a.priority)[0]?.action.type;
+  const shouldBlock = createNavigationCheck(rules);
+  for (const url of ["https://example.com/section", "https://example.com/section/", "https://www.example.com/section/123",
+    "https://example.com/section/sub/path?x=1", "https://example.com/exact/", "https://example.com/exact?x=1", "https://example.com/a+b"])
+    { assert.equal(action(url), "allowAllRequests", url); assert.equal(shouldBlock(url), false, url); }
+  for (const url of ["https://example.com/", "https://example.com/section-other", "https://example.com/exact/child",
+    "https://example.com/Section/1", "https://example.com/aaab", "https://example.com/?url=/section/123"])
+    { assert.equal(action(url), "redirect", url); assert.equal(shouldBlock(url), true, url); }
+  for (const url of ["https://other.org/section/123", "https://notexample.com/section/123", "https://example.com.other.org/section/123"])
+    { assert.equal(action(url), undefined, url); assert.equal(shouldBlock(url), false, url); }
+  assert.equal(shouldBlock("https://EXAMPLE.COM/section/1"), false);
+  assert.equal(shouldBlock("https://example.com/section/../feed"), true);
+  assert.equal(shouldBlock("chrome-extension://example.com/blocked.html"), false);
+  assert.equal(shouldBlock("not a URL"), false);
+  assert.equal(new Set(rules.map(rule => rule.id)).size, rules.length);
+  assert.ok(rules.filter(rule => rule.action.type === "allowAllRequests").every(rule =>
+    rule.condition.resourceTypes.length === 1 && rule.condition.resourceTypes[0] === "main_frame"));
+});
+
 function matchesRequest(rules, url, resourceType, action) {
   return rules.some(rule => (!action || rule.action.type === action) &&
     (!rule.condition.resourceTypes || rule.condition.resourceTypes.includes(resourceType)) &&
     !rule.condition.excludedResourceTypes?.includes(resourceType) &&
-    new RegExp(rule.condition.regexFilter, "i").test(url));
+    new RegExp(rule.condition.regexFilter, rule.condition.isUrlFilterCaseSensitive ? "" : "i").test(url));
 }
 
 function assertRulesFor(rules, domains) {
@@ -83,13 +116,27 @@ function event() {
 }
 
 function mockChrome() {
-  const state = { domains: [], rules: [], alarms: new Map(), failRules: false, failStorage: false };
+  const state = { domains: [], rules: [], alarms: new Map(), failRules: false, failStorage: false,
+    tabs: new Map(), tabReads: 0, tabUpdates: [] };
   const changed = event();
   const api = {
     runtime: {
       id: "test-extension",
       getURL: path => `chrome-extension://test-extension/${path}`,
       onMessage: event(), onStartup: event(), onInstalled: event()
+    },
+    tabs: {
+      onUpdated: event(),
+      async get(tabId) {
+        state.tabReads++;
+        if (!state.tabs.has(tabId)) throw new Error("Tab closed");
+        return structuredClone(state.tabs.get(tabId));
+      },
+      async update(tabId, update) {
+        state.tabUpdates.push({ tabId, ...update });
+        Object.assign(state.tabs.get(tabId), update);
+        api.tabs.onUpdated.emit(tabId, update);
+      }
     },
     storage: {
       onChanged: changed,
@@ -123,9 +170,9 @@ function mockChrome() {
       }
     }
   };
-  function message(type, domain, sender = { id: api.runtime.id, url: api.runtime.getURL("popup.html") }) {
+  function message(type, domain, sender = { id: api.runtime.id, url: api.runtime.getURL("popup.html") }, path) {
     return new Promise(resolve => {
-      const responses = api.runtime.onMessage.emit({ type, domain }, sender, resolve);
+      const responses = api.runtime.onMessage.emit({ type, domain, path }, sender, resolve);
       if (!responses.includes(true)) resolve(undefined);
     });
   }
@@ -265,6 +312,7 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   // A fresh module instance simulates a new worker, without startup/onInstalled events.
   api.runtime.onMessage = event();
   api.storage.onChanged = event();
+  api.tabs.onUpdated = event();
   // Simulate persisted rules from the old Safari version before the worker wakes.
   state.rules = [{
     id: 1, priority: 1,
@@ -302,6 +350,55 @@ test(`${namespace}: background enforces addition cooldowns and recovers across w
   await message("list");
   assert.equal(state.domains[0].addedAt, migrated[0].addedAt);
   assert.equal((await message("remove", "example.org")).ok, true);
+
+  const unchangedAddition = state.domains[0].addedAt;
+  const paths = await Promise.all([
+    message("allowPath", "example.com", undefined, "/section/*"),
+    message("allowPath", "example.com", undefined, "https://www.example.com/exact/")
+  ]);
+  assert.ok(paths.every(response => response.ok));
+  assert.deepEqual(state.domains[0].allowedPaths, ["/section/*", "/exact"]);
+  assert.equal(state.domains[0].addedAt, unchangedAddition, "path changes preserve the domain cooldown");
+  assert.equal((await message("remove", "example.com")).ok, false);
+  assert.equal((await message("allowPath", "example.com", undefined, "/section/*")).ok, false);
+  assert.equal((await message("allowPath", "example.com", undefined, "/*")).ok, false);
+  assert.equal((await message("allowPath", "example.com", undefined, "https://other.org/section/*")).ok, false);
+  assert.equal(await message("allowPath", "example.com", blockedSender, "/bypass"), undefined);
+  api.runtime.onStartup.emit();
+  await message("list");
+  assert.equal(state.rules.filter(rule => rule.action.type === "allowAllRequests").length, 2);
+  await message("removeAllowedPath", "example.com", undefined, "/section/*");
+  assert.deepEqual(state.domains[0].allowedPaths, ["/exact"]);
+  assert.equal(state.rules.filter(rule => rule.action.type === "allowAllRequests").length, 1);
+
+  const allowed = "https://www.example.com/exact?view=1";
+  state.tabs.set(1, { url: allowed });
+  api.tabs.onUpdated.emit(1, { url: allowed });
+  api.tabs.onUpdated.emit(1, { title: "Title update" });
+  api.tabs.onUpdated.emit(2, { url: "https://other.org/" });
+  api.tabs.onUpdated.emit(3, { url: api.runtime.getURL("blocked.html") });
+  await message("list");
+  assert.equal(state.tabReads, 0, "allowed/unrelated URL and title updates do not need tab API calls");
+  const denied = "https://www.example.com/feed";
+  state.tabs.set(1, { url: denied });
+  api.tabs.onUpdated.emit(1, { url: denied });
+  await message("list");
+  assert.deepEqual(state.tabUpdates, [{ tabId: 1, url: api.runtime.getURL("blocked.html") }]);
+
+  // An older queued URL event must not redirect a tab that has moved elsewhere.
+  state.tabs.set(1, { url: allowed });
+  api.tabs.onUpdated.emit(1, { url: denied });
+  state.tabs.set(2, { url: denied, pendingUrl: allowed });
+  api.tabs.onUpdated.emit(2, { url: denied });
+  api.tabs.onUpdated.emit(999, { url: denied });
+  await message("list");
+  assert.equal(state.tabUpdates.length, 1, "stale, pending, and closed tabs are left alone");
+
+  await message("removeAllowedPath", "example.com", undefined, "/exact");
+  state.tabs.set(1, { url: allowed });
+  api.tabs.onUpdated.emit(1, { url: allowed });
+  await message("list");
+  assert.equal(state.tabUpdates.length, 2, "editing paths refreshes the in-memory navigation policy");
 });
 }
 
